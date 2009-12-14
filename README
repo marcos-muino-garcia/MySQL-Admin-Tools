@@ -1,5 +1,5 @@
-This project contains some utilities that can be useful when you have to administer MySQL servers.
+This project contains some utilities that can be useful when you deal with MySQL administration.
 
 -dbCopy.sh:
-    This tools can replicate databases in different instances or servers MySQL.
-    It's quite useful for really big databases, due to it doesn't use any temporary disk space (it use a pipe to move the data). It use a CSV export and import mecanism instead of standard MySQL backup utility, and this increase significantly the performance.
+    A simple tool to replicate databases in MySQL instances or servers.
+    It's quite useful for really big tables, due to it doesn't use any temporary disk space (it use a pipe to move the data). It uses a CSV export and import mecanism instead of standard MySQL backup utility, and this increases significantly the performance.
