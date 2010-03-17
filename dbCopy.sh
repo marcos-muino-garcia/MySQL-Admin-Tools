@@ -1,8 +1,8 @@
 #!/bin/sh
 
-TMP_DIR="/tmp"
-#mkdir -p $TMP_DIR
-#chmod a+w $TMP_DIR
+TMP_DIR="/tmp/dbCopy"
+mkdir -p $TMP_DIR
+chmod a+w $TMP_DIR
 
 function usage {
     echo 'Usage: '$0' sourceHost sourcePort sourceUser sourcePassword targetHost targetPort targetUser targetPassword database1 database2 ...'
@@ -33,6 +33,20 @@ shift
 targetPassword=$1
 shift
 
+echo 'Testing database connections'
+
+TEST_SOURCE=$($MYSQL -h $sourceHost -P $sourcePort -u $sourceUser -p$sourcePassword -Bse 'select 1')
+if [ "$TEST_SOURCE" != "1" ]; then
+    echo 'Invalid config at source connection'
+    exit
+fi
+
+TEST_TARGET=$($MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword -Bse 'select 1')
+if [ "$TEST_TARGET" != "1" ]; then
+    echo 'Invalid config at target connection'
+    exit
+fi
+
 echo 'Replicating '$#' databases: '$@
 
 INIT=`date +%s`
@@ -44,14 +58,27 @@ for db in $@; do
     echo "drop database if exists $db;" | $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword
     echo "create database $db;" | $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword
 
-    $MYSQLDUMP -h $sourceHost -P $sourcePort -u $sourceUser -p$sourcePassword --no-data $db | $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword $db
+    $MYSQLDUMP -h $sourceHost -P $sourcePort -u $sourceUser -p$sourcePassword --no-data $db > $TMP_DIR"/"$db".schema" 
+    
+    RETVAL=$?
+    if [ "$RETVAL" != "0" ]; then
+        echo 'Error exporting DDL from source host. Check user permissions'
+        exit
+    fi
 
-    echo "    DDL executed"
+    $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword $db < $TMP_DIR"/"$db".schema"
+
+    RETVAL=$?
+    if [ "$RETVAL" != "0" ]; then
+        echo 'Error executing DDL in destination host. Check user permissions'
+        exit
+    fi  
+
 
     TABLES=$($MYSQL -h $sourceHost -P $sourcePort -u $sourceUser -p$sourcePassword -Bse 'show full tables from '$db | grep 'BASE TABLE' | awk '{print $1}')
 
     for table in $TABLES; do
-        echo "Disabling keys for table $db.$table"
+        echo "Disabling keys at table $db.$table"
 
         echo "alter table $db.$table disable keys;" | $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword
     done
@@ -64,17 +91,17 @@ for db in $@; do
         mkfifo $DATA_TABLE_FILE
         chmod 666 $DATA_TABLE_FILE
 
-        $MYSQL -h $sourceHost -P $sourcePort -u $sourceUser -p$sourcePassword -qBse "select /*!40001 SQL_NO_CACHE */ * from $db.$table" >> $DATA_TABLE_FILE &
-        $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword -e "LOAD DATA LOCAL INFILE '$DATA_TABLE_FILE' INTO TABLE $db.$table"
+        $MYSQL -h $sourceHost -P $sourcePort -u $sourceUser -p$sourcePassword -qBse "select /*!40001 SQL_NO_CACHE */ * from $db.$table" | sed s/'NULL'/'\\N'/g >> $DATA_TABLE_FILE &
+        $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword -e "SET foreign_key_checks = 0;LOAD DATA LOCAL INFILE '$DATA_TABLE_FILE' INTO TABLE $db.$table;SET foreign_key_checks = 1;"
 
         rm -f $DATA_TABLE_FILE
     done
 
     for table in $TABLES; do
 
-        echo "Enabling keys for table $db.$table"
+        echo "Enabling and optimizing keys at table $db.$table"
 
-        echo "alter table $db.$table enable keys;" | $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword
+        echo "alter table $db.$table enable keys; optimize table $db.$table;" | $MYSQL -h $targetHost -P $targetPort -u $targetUser -p$targetPassword > /dev/null
     done
 
 done
